@@ -7,7 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/directconnect"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 )
@@ -68,7 +68,7 @@ func resourceAwsDirectconnectVirtualInterface() *schema.Resource {
 					Schema: map[string]*schema.Schema{
 						"cidr": &schema.Schema{
 							Type:    schema.TypeString,
-							Rquired: true,
+							Required: true,
 						},
 					},
 				},
@@ -78,11 +78,11 @@ func resourceAwsDirectconnectVirtualInterface() *schema.Resource {
 }
 
 func resourceAwsDirectconnectVirtualInterfaceCreate(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).dirconn
 	connID := aws.String(d.Get("connection_id").(string))
 
 	// Create the directconnect virtual interface
-	createInterfaceOpts := &ec2.NewPrivateVirtualInterface{
+	createInterfaceOpts := &directconnect.NewPrivateVirtualInterface{
 		VirtualInterfaceName: aws.String(d.Get("virtual_interface_name").(string)),
 		Vlan:                 aws.String(d.Get("vlan").(string)),
 		Asn:                  aws.String(d.Get("asn").(string)),
@@ -91,7 +91,7 @@ func resourceAwsDirectconnectVirtualInterfaceCreate(d *schema.ResourceData, meta
 		CustomerAddress:      aws.String(d.Get("customer_address").(string)),
 		VirtualGatewayId:     aws.String(d.Get("virtual_gateway_id").(string)),
 	}
-	createOpts := &ec2.CreatePrivateVirtualInterfaceInput{
+	createOpts := &directconnect.CreatePrivateVirtualInterfaceInput{
 		ConnectionId:               connID,
 		NewPrivateVirtualInterface: createInterfaceOpts,
 	}
@@ -102,8 +102,7 @@ func resourceAwsDirectconnectVirtualInterfaceCreate(d *schema.ResourceData, meta
 	}
 
 	// Get the ID and store it
-	VirtualInterface := resp.VirtualInterface
-	d.SetId(*VirtualInterface.virtualInterfaceId)
+	d.SetId(resp.VirtualInterfaceId)
 	log.Printf("[INFO] Direct Connect private virtual interface ID: %s", d.Id())
 
 	// Wait for the direct connect virtual interface to become available
@@ -125,114 +124,74 @@ func resourceAwsDirectconnectVirtualInterfaceCreate(d *schema.ResourceData, meta
 	return resourceAwsVPCPeeringUpdate(d, meta)
 }
 
-func resourceAwsVPCPeeringRead(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*AWSClient).ec2conn
-	pcRaw, _, err := resourceAwsVPCPeeringConnectionStateRefreshFunc(conn, d.Id())()
+func resourceAwsDirectconnectVirtualInterfaceRead(d *schema.ResourceData, meta interface{}) error {
+	conn := meta.(*AWSClient).dirconn
+	connID := aws.String(d.Get("connection_id").(string))
+
+	viRaw, _, err := resourceAwsDirectconnectVirtualInterfaceStateRefreshFunc(conn, d.Id(), connID)()
 	if err != nil {
 		return err
 	}
-	if pcRaw == nil {
+	if viRaw == nil {
 		d.SetId("")
 		return nil
 	}
 
-	pc := pcRaw.(*ec2.VpcPeeringConnection)
+	vi := viRaw.(*directconnect.VirtualInterface)
 
-	// The failed status is a status that we can assume just means the
-	// connection is gone. Destruction isn't allowed, and it eventually
-	// just "falls off" the console. See GH-2322
-	if pc.Status != nil {
-		if *pc.Status.Code == "failed" || *pc.Status.Code == "deleted" {
-			log.Printf("[DEBUG] VPC Peering Connect (%s) in state (%s), removing", d.Id(), *pc.Status.Code)
-			d.SetId("")
-			return nil
-		}
-	}
-
-	d.Set("accept_status", *pc.Status.Code)
-	d.Set("peer_owner_id", pc.AccepterVpcInfo.OwnerId)
-	d.Set("peer_vpc_id", pc.AccepterVpcInfo.VpcId)
-	d.Set("vpc_id", pc.RequesterVpcInfo.VpcId)
-	d.Set("tags", tagsToMap(pc.Tags))
+	d.Set("connectionId", *vi.ConnectionId)
+	d.Set("virtual_interface_name", vi.VirtualInterfaceName)
+	d.Set("vlan", vi.Vlan)
+	d.Set("asn", vi.Asn)
+	d.Set("auth_key", vi.AuthKey)
+	d.Set("amazon_address", vi.AmazonAddress)
+	d.Set("customer_address", vi.CustomerAddress)
+	d.Set("virtual_gateway_id", vi.VirtualGatewayId)
+	d.Set("route_filter_prefixes", vi.RouteFilterPrefixes)
 
 	return nil
 }
 
-func resourceVPCPeeringConnectionAccept(conn *ec2.EC2, id string) (string, error) {
+func resourceAwsDirectconnectVirtualInterfaceUpdate(d *schema.ResourceData, meta interface{}) error {
+	conn := meta.(*AWSClient).dirconn
+	connID := aws.String(d.Get("connection_id").(string))
 
-	log.Printf("[INFO] Accept VPC Peering Connection with id: %s", id)
+	viRaw, _, err := resourceAwsDirectconnectVirtualInterfaceStateRefreshFunc(conn, d.Id(), connID)()
 
-	req := &ec2.AcceptVpcPeeringConnectionInput{
-		VpcPeeringConnectionId: aws.String(id),
-	}
-
-	resp, err := conn.AcceptVpcPeeringConnection(req)
 	if err != nil {
-		return "", err
-	}
-	pc := resp.VpcPeeringConnection
-	return *pc.Status.Code, err
-}
-
-func resourceAwsVPCPeeringUpdate(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*AWSClient).ec2conn
-
-	if err := setTags(conn, d); err != nil {
 		return err
-	} else {
-		d.SetPartial("tags")
 	}
-d.GetOk(key string)
-	if _, ok := d.GetOk("auto_accept"); ok {
-		pcRaw, _, err := resourceAwsVPCPeeringConnectionStateRefreshFunc(conn, d.Id())()
-
-		if err != nil {
-			return err
-		}
-		if pcRaw == nil {
-			d.SetId("")
-			return nil
-		}
-		pc := pcRaw.(*ec2.VpcPeeringConnection)
-
-		if pc.Status != nil && *pc.Status.Code == "pending-acceptance" {
-			status, err := resourceVPCPeeringConnectionAccept(conn, d.Id())
-			if err != nil {
-				return err
-			}
-			log.Printf(
-				"[DEBUG] VPC Peering connection accept status: %s",
-				status)
-		}
+	if viRaw == nil {
+		d.SetId("")
+		return nil
 	}
 
-	return resourceAwsVPCPeeringRead(d, meta)
+	return resourceAwsDirectconnectVirtualInterfaceRead(d, meta)
 }
 
-func resourceAwsVPCPeeringDelete(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*AWSClient).ec2conn
+func resourceAwsDirectconnectVirtualInterfaceDelete(d *schema.ResourceData, meta interface{}) error {
+	conn := meta.(*AWSClient).dirconn
 
-	_, err := conn.DeleteVpcPeeringConnection(
-		&ec2.DeleteVpcPeeringConnectionInput{
-			VpcPeeringConnectionId: aws.String(d.Id()),
+	_, err := conn.DeleteVirtualInterface(
+		&directconnect.DeleteVirtualInterfaceInput{
+			VirtualInterfaceId: aws.String(d.Id()),
 		})
 	return err
 }
 
 // resourceAwsVPCPeeringConnectionStateRefreshFunc returns a resource.StateRefreshFunc that is used to watch
 // a VPCPeeringConnection.
-func resourceAwsDirectconnectVirtualInterfaceStateRefreshFunc(conn *ec2.EC2, id string, connid string) resource.StateRefreshFunc {
+func resourceAwsDirectconnectVirtualInterfaceStateRefreshFunc(conn *directconnect.DirectConnect, id string, connId string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
-
-		resp, err := conn.DescribeVirtualInterfaces(&ec2.DescribeVirtualInterfacesInput{
-			connectionId:       []*string{aws.String(connid)},
-			virtualInterfaceId: []*string{aws.String(id)},
+		resp, err := conn.DescribeVirtualInterfaces(&directconnect.DescribeVirtualInterfacesInput{
+			ConnectionId:       []*string{aws.String(connId)},
+			VirtualInterfaceId: []*string{aws.String(id)},
 		})
 		if err != nil {
-			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidVpcPeeringConnectionID.NotFound" {
+			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidDirectconnectVirtualInterfaceID.NotFound" {
 				resp = nil
 			} else {
-				log.Printf("Error on VPCPeeringConnectionStateRefresh: %s", err)
+				log.Printf("Error on DirectConnectVirtualInterfaceStateRefresh: %s", err)
 				return nil, "", err
 			}
 		}
@@ -243,8 +202,8 @@ func resourceAwsDirectconnectVirtualInterfaceStateRefreshFunc(conn *ec2.EC2, id 
 			return nil, "", nil
 		}
 
-		pc := resp.VpcPeeringConnections[0]
+		vi := resp.VirtualInterfaces[0]
 
-		return pc, *pc.Status.Code, nil
+		return vi, *vi.VirtualInterfaceId, nil
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go/service/codecommit"
 	"github.com/aws/aws-sdk-go/service/codedeploy"
+	"github.com/aws/aws-sdk-go/service/directconnect"
 	"github.com/aws/aws-sdk-go/service/directoryservice"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -81,6 +82,7 @@ type AWSClient struct {
 	cloudwatchconn       *cloudwatch.CloudWatch
 	cloudwatchlogsconn   *cloudwatchlogs.CloudWatchLogs
 	cloudwatcheventsconn *cloudwatchevents.CloudWatchEvents
+	dirconn              *directconnect.DirectConnect
 	dsconn               *directoryservice.DirectoryService
 	dynamodbconn         *dynamodb.DynamoDB
 	ec2conn              *ec2.EC2
@@ -288,6 +290,9 @@ func (c *Config) Client() (interface{}, error) {
 
 		log.Println("[INFO] Initializing OpsWorks Connection")
 		client.opsworksconn = opsworks.New(usEast1Sess)
+
+		log.Println("[INFO] Initializing DirectConnect connection")
+		client.dirconn = directconnect.New(sess)
 
 		log.Println("[INFO] Initializing Directory Service connection")
 		client.dsconn = directoryservice.New(sess)
